@@ -56,13 +56,32 @@ jobs:
           EXISTING_PR=$(gh pr list --repo "$COMPANY_REPO" --base "$BASE" --head "$HEAD" --state open --json number --jq '.[0].number // empty')
 
           if [ -z "$EXISTING_PR" ]; then
-            gh pr create \
-              --repo "$COMPANY_REPO" \
-              --base "$BASE" \
-              --head "$HEAD" \
-              --title "Sync: ${{ github.repository }} (development) -> company (development)" \
-              --body "Automated sync from team repository. No manual approval required for this stage."
-            PR_NUMBER=$(gh pr list --repo "$COMPANY_REPO" --base "$BASE" --head "$HEAD" --state open --json number --jq '.[0].number')
+            # NOTE: we deliberately use the raw REST API here instead of `gh pr create`.
+            # `gh pr create` (and its underlying GraphQL mutation) tries to grant
+            # "maintainer can modify" collaborator access on the HEAD repo (the fork)
+            # to the token's identity. Since COMPANY_SYNC_TOKEN has no permissions on
+            # the team repo at all, that step fails with:
+            #   "Fork collab can't be granted by someone without permission"
+            # Setting maintainer_can_modify:false via the REST API skips that step
+            # entirely, since we never need edit access on the team repo anyway.
+            RESPONSE=$(curl -sS -X POST \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${COMPANY_REPO}/pulls" \
+              -d "$(jq -n \
+                    --arg title "Sync: ${TEAM_OWNER}/${{ github.event.repository.name }} (development) -> company (development)" \
+                    --arg head "$HEAD" \
+                    --arg base "$BASE" \
+                    --arg body "Automated sync from team repository. No manual approval required for this stage." \
+                    '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:false}')")
+
+            PR_NUMBER=$(echo "$RESPONSE" | jq -r '.number // empty')
+
+            if [ -z "$PR_NUMBER" ]; then
+              echo "::error::Failed to create PR. API response:"
+              echo "$RESPONSE"
+              exit 1
+            fi
           else
             PR_NUMBER="$EXISTING_PR"
           fi
