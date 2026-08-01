@@ -41,7 +41,7 @@ jobs:
       - name: Create or reuse Pull Request
         id: pr
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TEAM_REPO_TOKEN }}
           HEAD_BRANCH: ${{ steps.vars.outputs.branch }}
         run: |
           set -euo pipefail
@@ -65,6 +65,6 @@ jobs:
       - name: Auto-merge Pull Request
         if: steps.pr.outputs.pr_number != ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TEAM_REPO_TOKEN }}
         run: |
           gh pr merge "${{ steps.pr.outputs.pr_number }}" --merge --admin --delete-branch=false
