@@ -1,0 +1,78 @@
+# =============================================================================
+# TEAM REPOSITORY WORKFLOW 2
+# Trigger : push to `development` in the TEAM repo (i.e. after workflow 1 merges)
+# Action  : open a cross-repo PR (team fork -> company repo, base=development)
+#           and auto-merge it, so company `development` always has latest
+#           intern code with zero manual approval.
+#
+# Requires (set once per team repo, NOT hardcoded):
+#   - Secret   COMPANY_SYNC_TOKEN : PAT belonging to a bot/service account that
+#                                    has WRITE access to the company repo, but
+#                                    is blocked by branch protection from ever
+#                                    touching `testing` or `main`.
+#   - Variable COMPANY_REPO       : "company-org/project-name"
+# =============================================================================
+name: "02 - Sync Development -> Company Repository"
+
+on:
+  push:
+    branches:
+      - development
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-to-company-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  sync-to-company:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate required configuration
+        run: |
+          if [ -z "${{ vars.COMPANY_REPO }}" ]; then
+            echo "::error::Repository variable COMPANY_REPO is not set (expected 'org/repo')."
+            exit 1
+          fi
+
+      - name: Create or reuse cross-repo Pull Request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.COMPANY_SYNC_TOKEN }}
+          COMPANY_REPO: ${{ vars.COMPANY_REPO }}
+          TEAM_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          HEAD="${TEAM_OWNER}:development"
+          BASE="development"
+
+          EXISTING_PR=$(gh pr list --repo "$COMPANY_REPO" --base "$BASE" --head "$HEAD" --state open --json number --jq '.[0].number // empty')
+
+          if [ -z "$EXISTING_PR" ]; then
+            gh pr create \
+              --repo "$COMPANY_REPO" \
+              --base "$BASE" \
+              --head "$HEAD" \
+              --title "Sync: ${{ github.repository }} (development) -> company (development)" \
+              --body "Automated sync from team repository. No manual approval required for this stage."
+            PR_NUMBER=$(gh pr list --repo "$COMPANY_REPO" --base "$BASE" --head "$HEAD" --state open --json number --jq '.[0].number')
+          else
+            PR_NUMBER="$EXISTING_PR"
+          fi
+
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Auto-merge into company development
+        if: steps.pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.COMPANY_SYNC_TOKEN }}
+          COMPANY_REPO: ${{ vars.COMPANY_REPO }}
+        run: |
+          gh pr merge "${{ steps.pr.outputs.pr_number }}" --repo "$COMPANY_REPO" --merge --admin --delete-branch=false
