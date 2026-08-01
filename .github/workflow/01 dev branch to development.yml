@@ -1,0 +1,70 @@
+# =============================================================================
+# TEAM REPOSITORY WORKFLOW 1
+# Trigger : push to any `dev-*` branch (e.g. dev-ajinkya, dev-rahul, dev-priya)
+# Action  : auto-create a PR into `development` and auto-merge it, no review
+# Scope   : runs entirely inside the team repo (fork). No company access needed.
+# =============================================================================
+name: "01 - Dev Branch -> Development (Auto PR + Auto Merge)"
+
+on:
+  push:
+    branches:
+      - "dev-*"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dev-to-development-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  auto-pr-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve branch name
+        id: vars
+        run: echo "branch=${GITHUB_REF#refs/heads/}" >> "$GITHUB_OUTPUT"
+
+      - name: Guard against base == head
+        if: steps.vars.outputs.branch == 'development'
+        run: |
+          echo "Push landed directly on 'development'; nothing to do here."
+          exit 0
+
+      - name: Create or reuse Pull Request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ steps.vars.outputs.branch }}
+        run: |
+          set -euo pipefail
+          BASE="development"
+
+          EXISTING_PR=$(gh pr list --base "$BASE" --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number // empty')
+
+          if [ -z "$EXISTING_PR" ]; then
+            gh pr create \
+              --base "$BASE" \
+              --head "$HEAD_BRANCH" \
+              --title "Auto: ${HEAD_BRANCH} -> ${BASE}" \
+              --body "Automatically created by CI. No Team Lead approval required at this stage per team-repo sandbox policy."
+            PR_NUMBER=$(gh pr list --base "$BASE" --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number')
+          else
+            PR_NUMBER="$EXISTING_PR"
+          fi
+
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Auto-merge Pull Request
+        if: steps.pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge "${{ steps.pr.outputs.pr_number }}" --merge --admin --delete-branch=false
